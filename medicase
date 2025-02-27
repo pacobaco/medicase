@@ -1,0 +1,150 @@
+import pandas as pd
+import requests
+
+# Load medical procedure codes
+codes_df = pd.read_csv("medical_procedure_codes.csv")
+
+# API Endpoints
+CMS_API_URL = "https://data.cms.gov/resource/your_cms_endpoint.json"
+PRIVATE_API_URL = {
+    "Aetna": "https://api.aetna.com/price",
+    "Cigna": "https://api.cigna.com/price",
+    "UnitedHealthcare": "https://api.uhc.com/price"
+}
+CASH_PAY_API_URL = "https://api.selfpaypricing.com/get_price"
+LODGING_API_URL = "https://api.travel.com/hotels"
+FLIGHT_API_URL = "https://api.travel.com/flights"
+
+# API Keys
+CMS_API_KEY = "your_cms_api_key"
+PRIVATE_API_KEYS = {
+    "Aetna": "your_aetna_api_key",
+    "Cigna": "your_cigna_api_key",
+    "UnitedHealthcare": "your_uhc_api_key"
+}
+CASH_PAY_API_KEY = "your_cashpay_api_key"
+LODGING_API_KEY = "your_lodging_api_key"
+FLIGHT_API_KEY = "your_flight_api_key"
+
+def get_cms_price(procedure_code, location):
+    """Fetch Medicare price for a procedure by location."""
+    headers = {"X-App-Token": CMS_API_KEY}
+    params = {"procedure_code": procedure_code, "location": location}
+    
+    response = requests.get(CMS_API_URL, headers=headers, params=params)
+    
+    if response.status_code == 200:
+        data = response.json()
+        return data[0].get("average_cost", None)
+    return None
+
+def get_private_price(procedure_code, location, insurer):
+    """Fetch private insurance price for a procedure."""
+    url = PRIVATE_API_URL.get(insurer)
+    api_key = PRIVATE_API_KEYS.get(insurer)
+    
+    if not url or not api_key:
+        return None
+
+    headers = {"Authorization": f"Bearer {api_key}"}
+    params = {"procedure_code": procedure_code, "location": location}
+    
+    response = requests.get(url, headers=headers, params=params)
+    
+    if response.status_code == 200:
+        data = response.json()
+        return data[0].get("average_insurance_reimbursement", None)
+    return None
+
+def get_cashpay_price(procedure_code, location):
+    """Fetch cash (self-pay) price for a procedure."""
+    headers = {"Authorization": f"Bearer {CASH_PAY_API_KEY}"}
+    params = {"procedure_code": procedure_code, "location": location}
+    
+    response = requests.get(CASH_PAY_API_URL, headers=headers, params=params)
+    
+    if response.status_code == 200:
+        data = response.json()
+        return data[0].get("self_pay_price", None)
+    return None
+
+def get_lodging_cost(destination):
+    """Fetch lodging costs for medical tourism."""
+    headers = {"Authorization": f"Bearer {LODGING_API_KEY}"}
+    params = {"destination": destination}
+    
+    response = requests.get(LODGING_API_URL, headers=headers, params=params)
+    
+    if response.status_code == 200:
+        data = response.json()
+        return data.get("average_night_cost", None)  # Average hotel cost per night
+    return None
+
+def get_flight_cost(origin, destination):
+    """Fetch flight cost for medical tourism."""
+    headers = {"Authorization": f"Bearer {FLIGHT_API_KEY}"}
+    params = {"origin": origin, "destination": destination}
+    
+    response = requests.get(FLIGHT_API_URL, headers=headers, params=params)
+    
+    if response.status_code == 200:
+        data = response.json()
+        return data.get("average_ticket_price", None)
+    return None
+
+# Define locations and insurers
+us_locations = ["New York, NY", "Los Angeles, CA", "Chicago, IL", "Houston, TX"]
+international_locations = ["Bangkok, Thailand", "Mumbai, India", "Tijuana, Mexico"]
+insurers = ["Aetna", "Cigna", "UnitedHealthcare"]
+
+# Store pricing data
+pricing_data = []
+
+for index, row in codes_df.iterrows():
+    code = row["code"]
+    description = row["description"]
+
+    for location in us_locations:
+        cms_price = get_cms_price(code, location)
+        private_prices = {insurer: get_private_price(code, location, insurer) for insurer in insurers}
+        cash_price = get_cashpay_price(code, location)
+
+        all_prices = [cms_price, cash_price] + list(private_prices.values())
+        best_price = min(filter(None, all_prices))  # Find the best price
+
+        pricing_data.append({
+            "Code": code,
+            "Description": description,
+            "Location": location,
+            "Medicare Price": cms_price,
+            "Aetna Price": private_prices["Aetna"],
+            "Cigna Price": private_prices["Cigna"],
+            "UnitedHealthcare Price": private_prices["UnitedHealthcare"],
+            "Cash Price": cash_price,
+            "Best Domestic Price": best_price
+        })
+
+    for intl_location in international_locations:
+        intl_cash_price = get_cashpay_price(code, intl_location)
+        lodging_cost = get_lodging_cost(intl_location)
+        flight_cost = get_flight_cost("New York, NY", intl_location)  # Example from NY
+
+        total_intl_cost = (intl_cash_price or 0) + (lodging_cost or 0) * 5 + (flight_cost or 0)
+
+        pricing_data.append({
+            "Code": code,
+            "Description": description,
+            "Location": intl_location,
+            "Cash Price": intl_cash_price,
+            "Lodging Cost (5 nights)": lodging_cost * 5 if lodging_cost else None,
+            "Flight Cost": flight_cost,
+            "Total Medical Tourism Cost": total_intl_cost
+        })
+
+# Convert to DataFrame
+pricing_df = pd.DataFrame(pricing_data)
+
+# Save to CSV
+pricing_df.to_csv("medical_tourism_pricing.csv", index=False)
+
+print("Medical tourism pricing saved!")
